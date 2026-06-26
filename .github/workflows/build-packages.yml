@@ -1,4 +1,4 @@
-name: Build OpenWrt Firmware
+name: Build hp-lite Packages
 
 on:
   workflow_dispatch:
@@ -6,123 +6,154 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "v*"
 
 permissions:
   contents: write
 
 jobs:
   build:
+    name: Build ${{ matrix.name }}
     runs-on: ubuntu-24.04
 
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: openwrt-24.10.5-x86-64
+            sdk_base_url: https://downloads.openwrt.org/releases/24.10.5/targets/x86/64
+
+          - name: openwrt-snapshot-x86-64
+            sdk_base_url: https://downloads.openwrt.org/snapshots/targets/x86/64
+
     steps:
-      - name: Checkout
+      - name: Checkout package source
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3 python3-setuptools python3-pyelftools rsync swig unzip zlib1g-dev file wget curl xz-utils zstd
+
+      - name: Download OpenWrt SDK
+        env:
+          SDK_BASE_URL: ${{ matrix.sdk_base_url }}
+        run: |
+          SDK_FILE="$(curl -fsSL "${SDK_BASE_URL}/" | grep -oE 'openwrt-sdk-[^"]+Linux-x86_64\.tar\.(xz|zst)' | head -n 1)"
+
+          if [ -z "${SDK_FILE}" ]; then
+            exit 1
+          fi
+
+          curl -fL "${SDK_BASE_URL}/${SDK_FILE}" -o "${SDK_FILE}"
+
+          case "${SDK_FILE}" in
+            *.tar.zst)
+              tar --use-compress-program=unzstd -xf "${SDK_FILE}"
+              ;;
+            *.tar.xz)
+              tar -xJf "${SDK_FILE}"
+              ;;
+            *)
+              exit 1
+              ;;
+          esac
+
+          SDK_DIR="$(find . -maxdepth 1 -type d -name 'openwrt-sdk-*' | head -n 1)"
+
+          if [ -z "${SDK_DIR}" ]; then
+            exit 1
+          fi
+
+          echo "SDK_DIR=${SDK_DIR}" >> "$GITHUB_ENV"
+
+      - name: Copy package into SDK
+        run: |
+          mkdir -p "${SDK_DIR}/package/luci-app-hp-lite"
+
+          rsync -a ./ "${SDK_DIR}/package/luci-app-hp-lite/" --exclude='.git' --exclude='.github' --exclude='openwrt-sdk-*' --exclude='*.tar.xz' --exclude='*.tar.zst' --exclude='release' --exclude='artifacts'
+
+      - name: Update feeds
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Build luci-app-hp-lite
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          make defconfig
+          make package/luci-app-hp-lite/clean V=s || true
+          make package/luci-app-hp-lite/compile V=s -j"$(nproc)" || make package/luci-app-hp-lite/compile V=s -j1
+
+      - name: Collect packages
+        run: |
+          mkdir -p "release/${{ matrix.name }}"
+
+          find "${SDK_DIR}/bin/packages" -type f \( -name '*hp-lite*.ipk' -o -name '*hp-lite*.apk' \) | while read -r FILE; do
+            BASENAME="$(basename "${FILE}")"
+            cp -v "${FILE}" "release/${{ matrix.name }}/${{ matrix.name }}-${BASENAME}"
+          done
+
+          if [ -z "$(find "release/${{ matrix.name }}" -type f)" ]; then
+            exit 1
+          fi
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hp-lite-${{ matrix.name }}
+          path: release/${{ matrix.name }}/*
+
+  release:
+    name: Create or update Release
+    runs-on: ubuntu-24.04
+    needs: build
+
+    steps:
+      - name: Checkout package source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Build firmware
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Detect package version
+        id: version
         run: |
-          chmod +x ./build-cudy-tr3000-openwrt-immortalwrt.sh
+          PKG_VERSION="$(grep -oE 'PKG_VERSION:=[^[:space:]]+' Makefile | head -n 1 | cut -d '=' -f 2)"
+          PKG_RELEASE="$(grep -oE 'PKG_RELEASE:=[^[:space:]]+' Makefile | head -n 1 | cut -d '=' -f 2)"
 
-          # 避免 GitHub Actions 卡在交互输入
-          yes "" | ./build-cudy-tr3000-openwrt-immortalwrt.sh
+          if [ -z "${PKG_VERSION}" ]; then
+            exit 1
+          fi
 
-      - name: Collect firmware files
+          if [ -z "${PKG_RELEASE}" ]; then
+            PKG_RELEASE="1"
+          fi
+
+          TAG="v${PKG_VERSION}-r${PKG_RELEASE}"
+          TITLE="luci-app-hp-lite ${TAG}"
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release files
         run: |
           mkdir -p release
 
-          echo "开始查找固件文件..."
+          find artifacts -type f \( -name '*.ipk' -o -name '*.apk' \) -exec cp -v {} release/ \;
 
-          find . -path "*/bin/targets/*" -type f \
-            \( -name "*sysupgrade*.bin" \
-            -o -name "*factory*.bin" \
-            -o -name "*.itb" \
-            -o -name "*.img" \
-            -o -name "*.bin" \
-            -o -name "*.manifest" \
-            -o -name "*.buildinfo" \
-            -o -name "*.sha256sums" \
-            -o -name "version.buildinfo" \
-            -o -name "profiles.json" \) \
-            -exec cp -v {} release/ \;
+          if [ -z "$(find release -type f)" ]; then
+            exit 1
+          fi
 
           cd release
-
-          if [ -z "$(ls -A .)" ]; then
-            echo "没有找到任何固件文件"
-            exit 1
-          fi
-
-          echo "生成 sha256 校验文件..."
-          sha256sum * > sha256sums.txt || true
-
-          echo "本次准备上传的文件："
-          ls -lh
-
-      - name: Detect firmware version
-        id: version
-        run: |
-          echo "开始识别固件版本..."
-
-          FIRMWARE_FILE="$(find release -maxdepth 1 -type f \
-            \( -name "*sysupgrade*.bin" \
-            -o -name "*factory*.bin" \
-            -o -name "*.itb" \
-            -o -name "*.img" \
-            -o -name "*.bin" \) \
-            | sort | head -n 1)"
-
-          if [ -z "$FIRMWARE_FILE" ]; then
-            echo "没有找到可用于识别版本的固件文件"
-            exit 1
-          fi
-
-          BASENAME="$(basename "$FIRMWARE_FILE")"
-          NAME_NO_EXT="${BASENAME%.*}"
-
-          echo "用于识别版本的文件：$BASENAME"
-
-          DIST="$(echo "$NAME_NO_EXT" | cut -d '-' -f 1)"
-          SECOND_FIELD="$(echo "$NAME_NO_EXT" | cut -d '-' -f 2)"
-
-          # 情况 1：
-          # openwrt-23.05.5-xxx
-          # immortalwrt-24.10.2-xxx
-          if echo "$SECOND_FIELD" | grep -Eq '^[0-9]+(\.[0-9]+)+$'; then
-            VERSION="${DIST}-${SECOND_FIELD}"
-          else
-            # 情况 2：
-            # snapshot 文件名里没有 24.10.2 这种版本号
-            # 尝试从 version.buildinfo 读取 rxxxxx-xxxxxxx
-            VERSION_BUILDINFO="$(find release -maxdepth 1 -type f -name "version.buildinfo" | head -n 1)"
-
-            if [ -n "$VERSION_BUILDINFO" ]; then
-              RAW_VERSION="$(head -n 1 "$VERSION_BUILDINFO" | tr -d '\r\n ')"
-              VERSION="${DIST}-${RAW_VERSION}"
-            else
-              # 最后兜底：使用固件文件名
-              VERSION="$NAME_NO_EXT"
-            fi
-          fi
-
-          # 清理 tag 名，只保留安全字符
-          TAG="$(echo "$VERSION" \
-            | sed 's/[[:space:]]/-/g' \
-            | sed 's#[/:]#-#g' \
-            | sed 's/[^A-Za-z0-9._-]/-/g' \
-            | sed 's/-\+/-/g' \
-            | sed 's/^-//' \
-            | sed 's/-$//')"
-
-          if [ -z "$TAG" ]; then
-            echo "版本识别失败"
-            exit 1
-          fi
-
-          echo "识别到 Release 标签：$TAG"
-
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "title=$TAG" >> "$GITHUB_OUTPUT"
+          sha256sum * > sha256sums.txt
 
       - name: Create or update GitHub Release
         env:
@@ -133,55 +164,40 @@ jobs:
           DISPLAY_TIME="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
           NOTES=$(cat <<EOF
-          自动编译固件
+          自动编译 luci-app-hp-lite 软件包
 
-          固件版本：${TAG}
+          软件包版本：${TAG}
           编译时间：${DISPLAY_TIME}
           分支：${GITHUB_REF_NAME}
           Commit：${GITHUB_SHA}
           Workflow Run：${GITHUB_RUN_NUMBER}
-          Run Attempt：${GITHUB_RUN_ATTEMPT}
 
-          下载固件前建议先核对 sha256sums.txt。
+          文件说明：
+          - .ipk：适合 opkg 系统
+          - .apk：适合 apk 系统
+          - sha256sums.txt：校验文件
           EOF
           )
 
-          echo "更新 tag：${TAG}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git tag -fa "$TAG" "$GITHUB_SHA" -m "Firmware build ${TAG}"
-          git push origin "refs/tags/$TAG" --force
+          git tag -fa "${TAG}" "${GITHUB_SHA}" -m "Build ${TAG}"
+          git push origin "refs/tags/${TAG}" --force
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release 已存在，开始覆盖上传：${TAG}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            OLD_ASSETS="$(gh release view "${TAG}" --json assets -q '.assets[].name')"
 
-            echo "删除旧附件..."
-            OLD_ASSETS="$(gh release view "$TAG" --json assets -q '.assets[].name')"
-
-            if [ -n "$OLD_ASSETS" ]; then
+            if [ -n "${OLD_ASSETS}" ]; then
               while IFS= read -r ASSET_NAME; do
-                if [ -n "$ASSET_NAME" ]; then
-                  echo "删除旧附件：$ASSET_NAME"
-                  gh release delete-asset "$TAG" "$ASSET_NAME" -y || true
+                if [ -n "${ASSET_NAME}" ]; then
+                  gh release delete-asset "${TAG}" "${ASSET_NAME}" -y || true
                 fi
-              done <<< "$OLD_ASSETS"
+              done <<< "${OLD_ASSETS}"
             fi
 
-            echo "更新 Release 信息..."
-            gh release edit "$TAG" \
-              --title "$TITLE" \
-              --notes "$NOTES" \
-              --latest
-
-            echo "重新上传新附件..."
-            gh release upload "$TAG" release/* --clobber
+            gh release edit "${TAG}" --title "${TITLE}" --notes "${NOTES}" --latest
+            gh release upload "${TAG}" release/* --clobber
           else
-            echo "Release 不存在，创建新 Release：${TAG}"
-
-            gh release create "$TAG" release/* \
-              --title "$TITLE" \
-              --notes "$NOTES" \
-              --latest \
-              --target "$GITHUB_SHA"
+            gh release create "${TAG}" release/* --title "${TITLE}" --notes "${NOTES}" --latest --target "${GITHUB_SHA}"
           fi
