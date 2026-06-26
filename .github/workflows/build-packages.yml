@@ -3,8 +3,6 @@ name: Build OpenWrt Packages
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
     tags:
       - 'v*'
 
@@ -14,7 +12,7 @@ permissions:
 jobs:
   build:
     name: Build ${{ matrix.format }} on OpenWrt ${{ matrix.openwrt }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     strategy:
       fail-fast: false
@@ -23,6 +21,7 @@ jobs:
           - format: ipk
             openwrt: 24.10.7
             target: x86/64
+
           - format: apk
             openwrt: 25.12.4
             target: x86/64
@@ -61,8 +60,8 @@ jobs:
             libncurses5-dev \
             libssl-dev \
             python3 \
-            python3-distutils \
             python3-setuptools \
+            python3-venv \
             rsync \
             unzip \
             zlib1g-dev \
@@ -93,6 +92,7 @@ jobs:
 
           if [ -z "$SDK_FILE" ]; then
             echo "ERROR: Cannot find OpenWrt SDK from $BASE_URL"
+            echo "Please check whether OpenWrt ${{ matrix.openwrt }} SDK exists."
             exit 1
           fi
 
@@ -162,9 +162,14 @@ jobs:
 
           cd "$SDK_DIR"
 
-          echo "CONFIG_PACKAGE_luci-app-hp-lite=m" > .config
+          cat > .config <<'EOF'
+          CONFIG_PACKAGE_luci-app-hp-lite=m
+          CONFIG_PACKAGE_luci-i18n-hp-lite-zh-cn=m
+          EOF
+
           make defconfig
 
+          echo "Enabled package configs:"
           grep -E 'CONFIG_PACKAGE_luci-app-hp-lite|CONFIG_PACKAGE_luci-i18n-hp-lite' .config || true
 
       - name: Build package
@@ -207,7 +212,7 @@ jobs:
 
   release:
     name: Upload packages to GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs:
       - build
 
