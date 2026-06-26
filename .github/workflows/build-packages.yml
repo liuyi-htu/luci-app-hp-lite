@@ -1,237 +1,187 @@
-name: Build OpenWrt Packages
+name: Build OpenWrt Firmware
 
 on:
   workflow_dispatch:
+
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build ${{ matrix.format }} on OpenWrt ${{ matrix.openwrt }}
-    runs-on: ubuntu-22.04
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - format: ipk
-            openwrt: 24.10.7
-            target: x86/64
-
-          - format: apk
-            openwrt: 25.12.4
-            target: x86/64
+    runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout package source
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          path: package-src
+          fetch-depth: 0
 
-      - name: Show runner resources
+      - name: Build firmware
         run: |
-          echo "CPU cores:"
-          nproc
-          echo
-          echo "Memory:"
-          free -h
-          echo
-          echo "Disk:"
-          df -h
+          chmod +x ./build-cudy-tr3000-openwrt-immortalwrt.sh
 
-      - name: Install build dependencies
+          # 避免 GitHub Actions 卡在交互输入
+          yes "" | ./build-cudy-tr3000-openwrt-immortalwrt.sh
+
+      - name: Collect firmware files
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            clang \
-            flex \
-            bison \
-            g++ \
-            gawk \
-            gcc-multilib \
-            g++-multilib \
-            gettext \
-            git \
-            libncurses5-dev \
-            libssl-dev \
-            python3 \
-            python3-setuptools \
-            python3-venv \
-            rsync \
-            unzip \
-            zlib1g-dev \
-            file \
-            wget \
-            curl \
-            xz-utils \
-            zstd \
-            time
+          mkdir -p release
 
-      - name: Download OpenWrt SDK
-        shell: bash
-        run: |
-          set -euxo pipefail
+          echo "开始查找固件文件..."
 
-          cd "$RUNNER_TEMP"
+          find . -path "*/bin/targets/*" -type f \
+            \( -name "*sysupgrade*.bin" \
+            -o -name "*factory*.bin" \
+            -o -name "*.itb" \
+            -o -name "*.img" \
+            -o -name "*.bin" \
+            -o -name "*.manifest" \
+            -o -name "*.buildinfo" \
+            -o -name "*.sha256sums" \
+            -o -name "version.buildinfo" \
+            -o -name "profiles.json" \) \
+            -exec cp -v {} release/ \;
 
-          BASE_URL="https://downloads.openwrt.org/releases/${{ matrix.openwrt }}/targets/${{ matrix.target }}/"
+          cd release
 
-          echo "OpenWrt SDK page:"
-          echo "$BASE_URL"
-
-          SDK_FILE="$(
-            curl -fsSL "$BASE_URL" \
-              | grep -oE 'openwrt-sdk-[^"]+Linux-x86_64\.tar\.(xz|zst)' \
-              | head -n 1
-          )"
-
-          if [ -z "$SDK_FILE" ]; then
-            echo "ERROR: Cannot find OpenWrt SDK from $BASE_URL"
-            echo "Please check whether OpenWrt ${{ matrix.openwrt }} SDK exists."
+          if [ -z "$(ls -A .)" ]; then
+            echo "没有找到任何固件文件"
             exit 1
           fi
 
-          echo "SDK_FILE=$SDK_FILE"
+          echo "生成 sha256 校验文件..."
+          sha256sum * > sha256sums.txt || true
 
-          curl -fL "${BASE_URL}${SDK_FILE}" -o "$SDK_FILE"
+          echo "本次准备上传的文件："
+          ls -lh
 
-          tar -xf "$SDK_FILE"
+      - name: Detect firmware version
+        id: version
+        run: |
+          echo "开始识别固件版本..."
 
-          SDK_DIR="$(
-            find "$RUNNER_TEMP" \
-              -maxdepth 1 \
-              -type d \
-              -name 'openwrt-sdk-*' \
-              | head -n 1
-          )"
+          FIRMWARE_FILE="$(find release -maxdepth 1 -type f \
+            \( -name "*sysupgrade*.bin" \
+            -o -name "*factory*.bin" \
+            -o -name "*.itb" \
+            -o -name "*.img" \
+            -o -name "*.bin" \) \
+            | sort | head -n 1)"
 
-          if [ -z "$SDK_DIR" ]; then
-            echo "ERROR: SDK directory not found"
+          if [ -z "$FIRMWARE_FILE" ]; then
+            echo "没有找到可用于识别版本的固件文件"
             exit 1
           fi
 
-          echo "SDK_DIR=$SDK_DIR" >> "$GITHUB_ENV"
+          BASENAME="$(basename "$FIRMWARE_FILE")"
+          NAME_NO_EXT="${BASENAME%.*}"
 
-          echo "Extracted SDK:"
-          echo "$SDK_DIR"
+          echo "用于识别版本的文件：$BASENAME"
 
-      - name: Copy package source into SDK
-        shell: bash
+          DIST="$(echo "$NAME_NO_EXT" | cut -d '-' -f 1)"
+          SECOND_FIELD="$(echo "$NAME_NO_EXT" | cut -d '-' -f 2)"
+
+          # 情况 1：
+          # openwrt-23.05.5-xxx
+          # immortalwrt-24.10.2-xxx
+          if echo "$SECOND_FIELD" | grep -Eq '^[0-9]+(\.[0-9]+)+$'; then
+            VERSION="${DIST}-${SECOND_FIELD}"
+          else
+            # 情况 2：
+            # snapshot 文件名里没有 24.10.2 这种版本号
+            # 尝试从 version.buildinfo 读取 rxxxxx-xxxxxxx
+            VERSION_BUILDINFO="$(find release -maxdepth 1 -type f -name "version.buildinfo" | head -n 1)"
+
+            if [ -n "$VERSION_BUILDINFO" ]; then
+              RAW_VERSION="$(head -n 1 "$VERSION_BUILDINFO" | tr -d '\r\n ')"
+              VERSION="${DIST}-${RAW_VERSION}"
+            else
+              # 最后兜底：使用固件文件名
+              VERSION="$NAME_NO_EXT"
+            fi
+          fi
+
+          # 清理 tag 名，只保留安全字符
+          TAG="$(echo "$VERSION" \
+            | sed 's/[[:space:]]/-/g' \
+            | sed 's#[/:]#-#g' \
+            | sed 's/[^A-Za-z0-9._-]/-/g' \
+            | sed 's/-\+/-/g' \
+            | sed 's/^-//' \
+            | sed 's/-$//')"
+
+          if [ -z "$TAG" ]; then
+            echo "版本识别失败"
+            exit 1
+          fi
+
+          echo "识别到 Release 标签：$TAG"
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "title=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          TITLE: ${{ steps.version.outputs.title }}
         run: |
-          set -euxo pipefail
+          DISPLAY_TIME="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
-          mkdir -p "$SDK_DIR/package/luci-app-hp-lite"
+          NOTES=$(cat <<EOF
+          自动编译固件
 
-          rsync -a --delete \
-            "$GITHUB_WORKSPACE/package-src/" \
-            "$SDK_DIR/package/luci-app-hp-lite/" \
-            --exclude='.git' \
-            --exclude='.github' \
-            --exclude='openwrt-sdk*' \
-            --exclude='bin' \
-            --exclude='build_dir' \
-            --exclude='staging_dir' \
-            --exclude='tmp' \
-            --exclude='dl'
+          固件版本：${TAG}
+          编译时间：${DISPLAY_TIME}
+          分支：${GITHUB_REF_NAME}
+          Commit：${GITHUB_SHA}
+          Workflow Run：${GITHUB_RUN_NUMBER}
+          Run Attempt：${GITHUB_RUN_ATTEMPT}
 
-          echo "Package source copied to:"
-          echo "$SDK_DIR/package/luci-app-hp-lite"
-
-          echo "Package source files:"
-          find "$SDK_DIR/package/luci-app-hp-lite" -maxdepth 2 -type f | sort
-
-      - name: Update and install feeds
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          cd "$SDK_DIR"
-
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-
-      - name: Configure package
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          cd "$SDK_DIR"
-
-          cat > .config <<'EOF'
-          CONFIG_PACKAGE_luci-app-hp-lite=m
-          CONFIG_PACKAGE_luci-i18n-hp-lite-zh-cn=m
+          下载固件前建议先核对 sha256sums.txt。
           EOF
+          )
 
-          make defconfig
+          echo "更新 tag：${TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          echo "Enabled package configs:"
-          grep -E 'CONFIG_PACKAGE_luci-app-hp-lite|CONFIG_PACKAGE_luci-i18n-hp-lite' .config || true
+          git tag -fa "$TAG" "$GITHUB_SHA" -m "Firmware build ${TAG}"
+          git push origin "refs/tags/$TAG" --force
 
-      - name: Build package
-        shell: bash
-        run: |
-          set -euxo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release 已存在，开始覆盖上传：${TAG}"
 
-          cd "$SDK_DIR"
+            echo "删除旧附件..."
+            OLD_ASSETS="$(gh release view "$TAG" --json assets -q '.assets[].name')"
 
-          make package/luci-app-hp-lite/clean V=s || true
-          make package/luci-app-hp-lite/compile V=s -j"$(nproc)"
+            if [ -n "$OLD_ASSETS" ]; then
+              while IFS= read -r ASSET_NAME; do
+                if [ -n "$ASSET_NAME" ]; then
+                  echo "删除旧附件：$ASSET_NAME"
+                  gh release delete-asset "$TAG" "$ASSET_NAME" -y || true
+                fi
+              done <<< "$OLD_ASSETS"
+            fi
 
-      - name: Collect packages
-        shell: bash
-        run: |
-          set -euxo pipefail
+            echo "更新 Release 信息..."
+            gh release edit "$TAG" \
+              --title "$TITLE" \
+              --notes "$NOTES" \
+              --latest
 
-          mkdir -p "$GITHUB_WORKSPACE/dist/${{ matrix.format }}"
+            echo "重新上传新附件..."
+            gh release upload "$TAG" release/* --clobber
+          else
+            echo "Release 不存在，创建新 Release：${TAG}"
 
-          find "$SDK_DIR/bin/packages" \
-            \( -name '*hp-lite*.ipk' -o -name '*hp-lite*.apk' \) \
-            -type f \
-            -print \
-            -exec cp -v {} "$GITHUB_WORKSPACE/dist/${{ matrix.format }}/" \;
-
-          echo "Collected packages:"
-          find "$GITHUB_WORKSPACE/dist" -type f | sort
-
-      - name: Upload ${{ matrix.format }} packages
-        uses: actions/upload-artifact@v4
-        with:
-          name: hp-lite-${{ matrix.format }}-openwrt-${{ matrix.openwrt }}
-          path: dist/${{ matrix.format }}/*
-          if-no-files-found: error
-
-      - name: Show disk after build
-        if: always()
-        run: |
-          df -h
-
-  release:
-    name: Upload packages to GitHub Release
-    runs-on: ubuntu-22.04
-    needs:
-      - build
-
-    if: startsWith(github.ref, 'refs/tags/v')
-
-    steps:
-      - name: Download all package artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-
-      - name: Show release files
-        run: |
-          find dist -type f | sort
-
-      - name: Upload packages to release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/**/*.ipk
-            dist/**/*.apk
-          fail_on_unmatched_files: true
+            gh release create "$TAG" release/* \
+              --title "$TITLE" \
+              --notes "$NOTES" \
+              --latest \
+              --target "$GITHUB_SHA"
+          fi
