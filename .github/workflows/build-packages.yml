@@ -190,9 +190,7 @@ jobs:
           Commit：${GITHUB_SHA}
           Workflow Run：${GITHUB_RUN_NUMBER}
 
-          文件说明：
-          - .ipk：OpenWrt 24.10.7 稳定版 opkg 系统
-          - .apk：OpenWrt 25.12.4 稳定版 apk 系统
+ 
           EOF
           )
 
