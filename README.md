@@ -67,8 +67,8 @@ The output usually includes one matching pair:
 
 The GitHub Actions workflow builds both package formats:
 
-- `.ipk` with the OpenWrt 24.10.7 x86/64 SDK.
-- `.apk` with the OpenWrt 25.12.4 x86/64 SDK.
+- `.ipk` with the OpenWrt 24.10.7.
+- `.apk` with the OpenWrt 25.12.4.
 
 Each workflow run uploads both package sets as artifacts. When a tag like `v6.0-r2` is pushed, the workflow also uploads the generated `.apk` and `.ipk` files to the GitHub Release for that tag.
 
