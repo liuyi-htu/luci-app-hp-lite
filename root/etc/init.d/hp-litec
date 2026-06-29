@@ -1,0 +1,183 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+USE_PROCD=1
+
+EXTRA_COMMANDS="clear_log"
+
+PROG=/usr/bin/hp-litec
+WORKDIR=/tmp/hp-litec
+DEFAULT_LOG_DIR=/var/log/hp-lite
+LOG_FILE_NAME=hp-litec.log
+DEFAULT_LOG_FILE=$DEFAULT_LOG_DIR/$LOG_FILE_NAME
+LOG_FILE="$DEFAULT_LOG_FILE"
+LOG_DIR="$DEFAULT_LOG_DIR"
+CRON_TAG="# hp-litec-log-clean"
+DEFAULT_RETENTION=3
+
+shell_quote() {
+    printf "'%s'" "$(printf "%s" "$1" | sed "s/'/'\\\\''/g")"
+}
+
+normalize_retention() {
+    local ret="$1"
+
+    [ -z "$ret" ] && ret=$DEFAULT_RETENTION
+    case "$ret" in
+        *[!0-9]*)
+            ret=$DEFAULT_RETENTION
+            ;;
+    esac
+    [ "$ret" -lt 1 ] && ret=$DEFAULT_RETENTION
+    [ "$ret" -gt 3650 ] && ret=$DEFAULT_RETENTION
+
+    printf "%s" "$ret"
+}
+
+normalize_log_dir() {
+    local dir="$1"
+
+    [ -z "$dir" ] && dir="$DEFAULT_LOG_DIR"
+    case "$dir" in
+        /*) ;;
+        *) dir="$DEFAULT_LOG_DIR" ;;
+    esac
+    case "$dir" in
+        *..*) dir="$DEFAULT_LOG_DIR" ;;
+    esac
+    while [ "$dir" != "/" ] && [ "${dir%/}" != "$dir" ]; do
+        dir="${dir%/}"
+    done
+
+    printf "%s" "$dir"
+}
+
+normalize_log_file() {
+    local file="$1"
+
+    file="$(printf "%s" "$file" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    [ -z "$file" ] && file="$DEFAULT_LOG_FILE"
+    case "$file" in
+        /*) ;;
+        *) file="$DEFAULT_LOG_FILE" ;;
+    esac
+    case "$file" in
+        *..*|*/) file="$DEFAULT_LOG_FILE" ;;
+    esac
+
+    printf "%s" "$file"
+}
+
+log_dir_from_file() {
+    local file="$1"
+    local dir="${file%/*}"
+
+    [ "$dir" = "$file" ] && dir="/"
+    [ -z "$dir" ] && dir="/"
+
+    printf "%s" "$dir"
+}
+
+set_log_paths() {
+    local file
+    local dir
+
+    file="$(uci get hp-litec.global.log_file 2>/dev/null)"
+    if [ -z "$file" ]; then
+        dir="$(normalize_log_dir "$(uci get hp-litec.global.log_dir 2>/dev/null)")"
+        file="$dir/$LOG_FILE_NAME"
+    fi
+
+    LOG_FILE="$(normalize_log_file "$file")"
+    LOG_DIR="$(log_dir_from_file "$LOG_FILE")"
+}
+
+schedule_log_cleanup() {
+    local ret
+    local clean_cmd
+
+    set_log_paths
+    ret="$(normalize_retention "$1")"
+    clean_cmd="mkdir -p $(shell_quote "$LOG_DIR") && : > $(shell_quote "$LOG_FILE")"
+
+    [ -f /etc/crontabs/root ] || touch /etc/crontabs/root
+    sed -i "/$CRON_TAG/d" /etc/crontabs/root
+    echo "0 3 */$ret * * $clean_cmd $CRON_TAG" >> /etc/crontabs/root
+    /etc/init.d/cron reload >/dev/null 2>&1 || /etc/init.d/cron restart >/dev/null 2>&1
+}
+
+clear_log() {
+    set_log_paths
+    mkdir -p "$LOG_DIR"
+    : > "$LOG_FILE"
+    chmod 644 "$LOG_FILE"
+}
+
+start_service() {
+    set_log_paths
+    mkdir -p "$LOG_DIR"
+    mkdir -p "$WORKDIR"
+    touch "$LOG_FILE"
+    chmod 644 "$LOG_FILE"
+
+    echo "[$(date +"%Y-%m-%d %H:%M:%S")] [hp-litec] Starting service..." >> "$LOG_FILE"
+
+    [ -x "$PROG" ] || {
+        echo "[$(date +"%Y-%m-%d %H:%M:%S")] [hp-litec] Start failed: $PROG is not installed" >> "$LOG_FILE"
+        return 1
+    }
+
+    local code
+    code=$(uci get hp-litec.global.connect_code 2>/dev/null)
+    [ -z "$code" ] && {
+        echo "No connect code configured, please set it in LuCI"
+        echo "[$(date +"%Y-%m-%d %H:%M:%S")] [hp-litec] Start failed: connect_code is not configured, please set it in LuCI" >> "$LOG_FILE"
+        return 1
+    }
+
+    local cmd
+    cmd="$(shell_quote "$PROG") $(shell_quote "-c=$code") 2>&1 | tee -a $(shell_quote "$LOG_FILE")"
+
+    procd_open_instance
+    procd_set_param command sh -c "$cmd"
+    procd_set_param respawn
+    procd_set_param cwd "$WORKDIR"
+    procd_set_param file /etc/config/hp-litec
+    procd_close_instance
+
+    echo "[$(date +"%Y-%m-%d %H:%M:%S")] [hp-litec] Service started successfully, process is supervised by procd" >> "$LOG_FILE"
+
+    local RET
+    RET=$(uci get hp-litec.global.log_retention_days 2>/dev/null)
+    schedule_log_cleanup "$RET"
+
+    echo "[$(date +"%Y-%m-%d %H:%M:%S")] [hp-litec] Log cleanup scheduled: clear client log every $(normalize_retention "$RET") days at 03:00" >> "$LOG_FILE"
+}
+
+stop_service() {
+    set_log_paths
+    mkdir -p "$LOG_DIR"
+    touch "$LOG_FILE"
+    chmod 644 "$LOG_FILE"
+
+    procd_kill hp-litec 2>/dev/null
+
+    local pids
+    pids=$(pgrep -f "$PROG")
+    if [ -n "$pids" ]; then
+        local pid
+        for pid in $pids; do
+            if kill -9 "$pid" 2>/dev/null; then
+                echo "[$(date +"%Y-%m-%d %H:%M:%S")] [hp-litec] Process (PID: $pid) terminated successfully" >> "$LOG_FILE"
+            else
+                echo "[$(date +"%Y-%m-%d %H:%M:%S")] [hp-litec] Failed to terminate process (PID: $pid)" >> "$LOG_FILE"
+            fi
+        done
+
+        pkill -9 -f "$PROG" 2>/dev/null
+        echo "[$(date +"%Y-%m-%d %H:%M:%S")] [hp-litec] Cleaned up all hp-litec related processes" >> "$LOG_FILE"
+    else
+        echo "[$(date +"%Y-%m-%d %H:%M:%S")] [hp-litec] No running hp-litec process found" >> "$LOG_FILE"
+    fi
+}

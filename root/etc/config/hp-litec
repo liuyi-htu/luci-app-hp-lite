@@ -1,0 +1,4 @@
+config hp-litec 'global'
+	option connect_code ''
+	option log_file '/var/log/hp-lite/hp-litec.log'
+	option log_retention_days '3'

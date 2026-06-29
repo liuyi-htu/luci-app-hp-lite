@@ -1,0 +1,171 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: luci-app-hp-lite 1.0-r6\n"
+"PO-Revision-Date: 2026-06-29 00:00+0000\n"
+"Last-Translator: zyh <1540187368@qq.com>\n"
+"Language-Team: Chinese (Simplified Han script)\n"
+"Language: zh_Hans\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "hp-lite.acme_email"
+msgstr "ACME 邮箱"
+
+msgid "hp-lite.acme_http_port"
+msgstr "ACME HTTP 端口"
+
+msgid "hp-lite.admin_password"
+msgstr "管理员密码"
+
+msgid "hp-lite.admin_port"
+msgstr "管理端口"
+
+msgid "hp-lite.admin_username"
+msgstr "管理员用户名"
+
+msgid "hp-lite.app_title"
+msgstr "hp-lite 内网穿透"
+
+msgid "hp-lite.cannot_read_log_file"
+msgstr "无法读取日志文件。"
+
+msgid "hp-lite.choose_file"
+msgstr "选择文件"
+
+msgid "hp-lite.choose_file_first"
+msgstr "请先选择文件。"
+
+msgid "hp-lite.clear_log"
+msgstr "清空日志"
+
+msgid "hp-lite.client_configuration"
+msgstr "客户端配置"
+
+msgid "hp-lite.client_runtime_log"
+msgstr "客户端运行日志"
+
+msgid "hp-lite.client_running_message"
+msgstr "hp-lite客户端运行中"
+
+msgid "hp-lite.command_port"
+msgstr "命令端口"
+
+msgid "hp-lite.connection_code"
+msgstr "连接码"
+
+msgid "hp-lite.connection_code_placeholder"
+msgstr "连接码"
+
+msgid "hp-lite.credit_text"
+msgstr "此客户端由 HTU 的 zhangyahao 制作。"
+
+msgid "hp-lite.download_failed"
+msgstr "下载失败"
+
+msgid "hp-lite.downloaded_and_installed_successfully"
+msgstr "下载并安装成功"
+
+msgid "hp-lite.general_settings"
+msgstr "常规设置"
+
+msgid "hp-lite.install_status"
+msgstr "安装状态"
+
+msgid "hp-lite.installed"
+msgstr "已安装"
+
+msgid "hp-lite.loading_log"
+msgstr "正在加载日志..."
+
+msgid "hp-lite.local_upload"
+msgstr "本地上传"
+
+msgid "hp-lite.log_empty"
+msgstr "日志为空。"
+
+msgid "hp-lite.log_retention_days"
+msgstr "日志保留天数"
+
+msgid "hp-lite.no_file_chosen"
+msgstr "未选择文件"
+
+msgid "hp-lite.not_installed"
+msgstr "未安装"
+
+msgid "hp-lite.open_domain"
+msgstr "开启域名转发"
+
+msgid "hp-lite.refresh_interval"
+msgstr "每 %s 秒刷新。"
+
+msgid "hp-lite.remote_download"
+msgstr "远程下载"
+
+msgid "hp-lite.remove_installed"
+msgstr "移除安装"
+
+msgid "hp-lite.removed_successfully"
+msgstr "移除成功"
+
+msgid "hp-lite.running"
+msgstr "运行中"
+
+msgid "hp-lite.running_status"
+msgstr "运行状态"
+
+msgid "hp-lite.server_configuration"
+msgstr "服务端配置"
+
+msgid "hp-lite.server_credit_text"
+msgstr "此服务端由 HTU 的 zhangyahao 制作。"
+
+msgid "hp-lite.server_runtime_log"
+msgstr "服务端运行日志"
+
+msgid "hp-lite.server_running_message"
+msgstr "hp-lite服务端运行中"
+
+msgid "hp-lite.server_upload_space_warning"
+msgstr "服务端二进制文件过大，请先确保您的软路由有足够的空间。"
+
+msgid "hp-lite.start_service"
+msgstr "启动服务"
+
+msgid "hp-lite.stop_service"
+msgstr "停止服务"
+
+msgid "hp-lite.stopped"
+msgstr "已停止"
+
+msgid "hp-lite.system_architecture"
+msgstr "系统架构"
+
+msgid "hp-lite.tunnel_ip"
+msgstr "隧道 IP/域名"
+
+msgid "hp-lite.tunnel_port"
+msgstr "隧道端口"
+
+msgid "hp-lite.upload_failed"
+msgstr "上传失败"
+
+msgid "hp-lite.upload_request_failed"
+msgstr "上传请求失败"
+
+msgid "hp-lite.uploaded_and_installed_successfully"
+msgstr "上传并安装成功"
+
+msgid "hp-lite.uploading"
+msgstr "正在上传..."
+
+msgid "hp-lite.version_label"
+msgstr "版本："
+
+msgid "hp-lite.invalid_log_file"
+msgstr "日志文件必须是绝对文件路径，且不能包含 ..，不能以 / 结尾"
+
+msgid "hp-lite.log_file"
+msgstr "日志文件"
+
